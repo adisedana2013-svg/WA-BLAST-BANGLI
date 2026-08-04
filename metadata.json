@@ -1,0 +1,6 @@
+{
+  "name": "WA Blast SAMSAT Bangli",
+  "description": "Sistem Pengingat Pajak Kendaraan SAMSAT Bangli dengan fitur WA Blast dan Sinkronisasi Google Sheets",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
