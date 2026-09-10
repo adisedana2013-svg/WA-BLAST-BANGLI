@@ -456,10 +456,47 @@ export default function App() {
     }
   };
 
+  // --- Helpers for Date & Stats ---
+  const isSentToday = useCallback((dateStr?: string) => {
+    if (!dateStr || typeof dateStr !== 'string') return false;
+    const trimmed = dateStr.trim();
+    if (!trimmed) return false;
+
+    const now = new Date();
+    const todayISO = now.toISOString().split('T')[0];
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const todayLocal = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+    if (trimmed.startsWith(todayISO) || trimmed.startsWith(todayLocal)) {
+      return true;
+    }
+
+    const d = new Date(trimmed);
+    if (isNaN(d.getTime())) return false;
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    );
+  }, []);
+
+  const formatSentTime = (dateStr?: string) => {
+    if (!dateStr) return 'Hari ini';
+    try {
+      const dt = new Date(dateStr);
+      if (isNaN(dt.getTime())) return 'Hari ini';
+      return dt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WITA';
+    } catch {
+      return 'Hari ini';
+    }
+  };
+
   // --- Computed Data ---
   const stats = useMemo(() => {
     const total = allData.length;
     const sent = allData.filter(d => d.status === 'sent').length;
+    const sentTodayList = allData.filter(d => d.status === 'sent' && isSentToday(d.sent_at));
+    const sentToday = sentTodayList.length;
     const pending = total - sent;
     const dueSoon = allData.filter(d => {
       const dd = daysUntil(d.jatuh_tempo);
@@ -467,8 +504,8 @@ export default function App() {
     });
     const overdue = allData.filter(d => daysUntil(d.jatuh_tempo) < 0);
     const percent = total > 0 ? Math.round((sent / total) * 100) : 0;
-    return { total, sent, pending, dueSoon, overdue, percent };
-  }, [allData]);
+    return { total, sent, sentToday, sentTodayList, pending, dueSoon, overdue, percent };
+  }, [allData, isSentToday]);
 
   const filteredTableData = useMemo(() => {
     let data = [...allData];
@@ -828,6 +865,11 @@ export default function App() {
               <Database className="w-3.5 h-3.5 text-blue-600" />
               <span>{allData.length} Wajib Pajak</span>
             </div>
+
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-indigo-50/80 rounded-lg border border-indigo-100 text-xs font-semibold text-indigo-700">
+              <Send className="w-3.5 h-3.5 text-indigo-600" />
+              <span>{stats.sentToday} Terkirim Hari Ini</span>
+            </div>
             
             <button 
               onClick={loadFromGoogleSheet}
@@ -881,21 +923,20 @@ export default function App() {
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
                 {[
-                  { label: 'Total Wajib Pajak', val: stats.total, color: 'text-blue-600', icon: Database },
-                  { label: 'Pesan Terkirim', val: stats.sent, color: 'text-emerald-600', icon: CheckCircle },
-                  { label: 'Menunggu Antrian', val: stats.pending, color: 'text-amber-600', icon: Clock },
-                  { label: 'Hampir Jatuh Tempo', val: stats.dueSoon.length, color: 'text-rose-600', icon: AlertCircle },
+                  { label: 'Total Wajib Pajak', val: stats.total, color: 'text-blue-600', icon: Database, bg: 'bg-blue-50 text-blue-600', badge: 'Basis Data' },
+                  { label: 'Pesan Terkirim Hari Ini', val: stats.sentToday, color: 'text-indigo-600', icon: Send, bg: 'bg-indigo-50 text-indigo-600', badge: 'Hari Ini' },
+                  { label: 'Total Terkirim', val: stats.sent, color: 'text-emerald-600', icon: CheckCircle, bg: 'bg-emerald-50 text-emerald-600', badge: `${stats.percent}%` },
+                  { label: 'Menunggu Antrian', val: stats.pending, color: 'text-amber-600', icon: Clock, bg: 'bg-amber-50 text-amber-600', badge: 'Antrian' },
+                  { label: 'Hampir Jatuh Tempo', val: stats.dueSoon.length, color: 'text-rose-600', icon: AlertCircle, bg: 'bg-rose-50 text-rose-600', badge: '≤ 7 Hari' },
                 ].map((s, i) => (
-                  <div key={i} className="elegant-card p-6 flex flex-col justify-between">
+                  <div key={i} className="elegant-card p-6 flex flex-col justify-between hover:border-slate-300 transition-all">
                     <div className="flex items-center justify-between mb-4">
-                      <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-                        i === 0 ? 'bg-blue-50 text-blue-600' : i === 1 ? 'bg-emerald-50 text-emerald-600' : i === 2 ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'
-                      }`}>
+                      <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${s.bg}`}>
                          <s.icon className="w-6 h-6" />
                       </div>
-                      <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Metrik {i + 1}</span>
+                      <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-2.5 py-1 rounded-full border border-slate-100 uppercase tracking-wider">{s.badge}</span>
                     </div>
                     <div>
                       <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">{s.label}</p>
@@ -905,7 +946,55 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Pesan Terkirim Hari Ini */}
+                <div className="elegant-card flex flex-col overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-white">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-indigo-50 rounded-lg flex items-center justify-center">
+                        <Send className="w-5 h-5 text-indigo-600" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-sm tracking-tight uppercase">Pesan Terkirim Hari Ini</h3>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Aktivitas WhatsApp Terakhir</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">{stats.sentToday} Terkirim</span>
+                  </div>
+                  <div className="p-6 space-y-4 max-h-[400px] overflow-auto custom-scrollbar bg-slate-50/10">
+                    {stats.sentTodayList.length === 0 ? (
+                      <div className="text-center py-20 text-slate-300 flex flex-col items-center gap-3">
+                         <Send className="w-10 h-10 opacity-20" />
+                         <span className="text-xs font-bold uppercase tracking-widest opacity-50 italic">Belum ada pesan terkirim hari ini</span>
+                      </div>
+                    ) : stats.sentTodayList.map(d => (
+                      <div key={d.nopol} className="flex items-center justify-between p-4 rounded-xl border border-slate-100 bg-white shadow-sm hover:border-indigo-200 transition-all group">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center font-bold text-indigo-600 text-xs border border-indigo-100 flex-shrink-0">
+                            {d.nopol.slice(0, 2)}
+                          </div>
+                          <div className="min-w-0 truncate">
+                            <p className="text-sm font-bold text-slate-900 tracking-tight truncate">{d.nopol}</p>
+                            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-widest mt-0.5 truncate">{d.nama}</p>
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0 ml-2">
+                          <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-100 flex items-center gap-1">
+                            <CheckCircle className="w-3 h-3" /> {formatSentTime(d.sent_at)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="p-4 bg-white border-t border-slate-100 text-center">
+                    {userRole === 'admin' ? (
+                      <button onClick={() => setCurrentTab('blast')} className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] hover:text-indigo-600 transition-all">Buka Automasi Pengiriman</button>
+                    ) : (
+                      <span className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">Log Notifikasi Hari Ini</span>
+                    )}
+                  </div>
+                </div>
+
                 {/* Tunggakan Pajak */}
                 <div className="elegant-card flex flex-col overflow-hidden">
                   <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-white">
