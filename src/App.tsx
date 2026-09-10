@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TaxPayer, TabType, AppBackup } from './types.ts';
+import { ReportView } from './components/ReportView.tsx';
 
 const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbxs6dijT3fsPRDZ_CFc9BTuYbo6nvXEsOHozJyIqrCKz169W8Etg67OgxvpPEcU2aZC/exec";
 const STORAGE_KEY = 'samsat_wajib_pajak_data';
@@ -801,6 +802,7 @@ export default function App() {
             { id: 'data' as TabType, icon: Database, label: 'Basis Data' },
             { id: 'blast' as TabType, icon: MessageCircle, label: 'Kirim Pesan', adminOnly: true },
             { id: 'template' as TabType, icon: FileText, label: 'Format Pesan', adminOnly: true },
+            { id: 'laporan' as TabType, icon: FileSpreadsheet, label: 'Laporan' },
             { id: 'statistik' as TabType, icon: BarChart2, label: 'Statistik' },
           ].filter(item => !item.adminOnly || userRole === 'admin').map((item) => (
             <button
@@ -855,7 +857,7 @@ export default function App() {
         <header className="h-20 bg-white border-b border-slate-200 px-8 flex items-center justify-between flex-shrink-0 relative z-30">
           <div className="flex items-center gap-6">
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-              {currentTab === 'dashboard' ? 'Ringkasan Laporan' : currentTab === 'data' ? 'Basis Data Wajib Pajak' : currentTab === 'blast' ? 'Automasi Pengiriman' : currentTab === 'template' ? 'Konfigurasi Pesan' : 'Analisis Statistik'}
+              {currentTab === 'dashboard' ? 'Ringkasan Laporan' : currentTab === 'data' ? 'Basis Data Wajib Pajak' : currentTab === 'blast' ? 'Automasi Pengiriman' : currentTab === 'template' ? 'Konfigurasi Pesan' : currentTab === 'laporan' ? 'Laporan Status & Distribusi Pajak' : 'Analisis Statistik'}
             </h1>
             <div className="w-px h-6 bg-slate-200" />
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Aplikasi Samsat v2.4</span>
@@ -907,6 +909,13 @@ export default function App() {
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Gunakan fitur import/export untuk kecepatan input</p>
                 </div>
                 <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => setCurrentTab('laporan')}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-all active:scale-95"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
+                    <span>Laporan Resmi</span>
+                  </button>
                   <label className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-all cursor-pointer shadow-lg shadow-blue-600/20 active:scale-95 group">
                     <Upload className="w-4 h-4 group-hover:-translate-y-0.5 transition-transform" />
                     <span>Import JSON</span>
@@ -1660,6 +1669,18 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            </motion.div>
+          )}
+
+          {currentTab === 'laporan' && (
+            <motion.div
+              key="laporan"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="max-w-7xl mx-auto pb-12"
+            >
+              <ReportView allData={allData} onRefresh={loadFromGoogleSheet} />
             </motion.div>
           )}
         </AnimatePresence>

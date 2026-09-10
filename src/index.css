@@ -74,3 +74,19 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #cbd5e1;
 }
+
+@media print {
+  nav, header, .sidebar-link, .print\:hidden {
+    display: none !important;
+  }
+  body, main {
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+  @page {
+    size: A4;
+    margin: 1cm;
+  }
+}

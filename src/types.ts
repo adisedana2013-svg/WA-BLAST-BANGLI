@@ -8,7 +8,7 @@ export interface TaxPayer {
   timestamp: string;
 }
 
-export type TabType = 'dashboard' | 'data' | 'blast' | 'template' | 'statistik';
+export type TabType = 'dashboard' | 'data' | 'blast' | 'template' | 'statistik' | 'laporan';
 
 export interface AppBackup {
   version: string;
