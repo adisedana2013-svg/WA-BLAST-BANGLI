@@ -30,11 +30,13 @@ import {
   Shield,
   FileCheck,
   PieChart,
-  TrendingUp
+  TrendingUp,
+  ArrowRightLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TaxPayer, TabType, AppBackup } from './types.ts';
 import { ReportView } from './components/ReportView.tsx';
+import { SyncPetaTunggakanView } from './components/SyncPetaTunggakanView.tsx';
 
 const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbxs6dijT3fsPRDZ_CFc9BTuYbo6nvXEsOHozJyIqrCKz169W8Etg67OgxvpPEcU2aZC/exec";
 const STORAGE_KEY = 'samsat_wajib_pajak_data';
@@ -804,6 +806,7 @@ export default function App() {
             { id: 'template' as TabType, icon: FileText, label: 'Format Pesan', adminOnly: true },
             { id: 'laporan' as TabType, icon: FileSpreadsheet, label: 'Laporan' },
             { id: 'statistik' as TabType, icon: BarChart2, label: 'Statistik' },
+            { id: 'sinkronisasi' as TabType, icon: ArrowRightLeft, label: 'Sinkronisasi Data' },
           ].filter(item => !item.adminOnly || userRole === 'admin').map((item) => (
             <button
               key={item.id}
@@ -909,6 +912,13 @@ export default function App() {
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Gunakan fitur import/export untuk kecepatan input</p>
                 </div>
                 <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => setCurrentTab('sinkronisasi')}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 text-blue-700 border border-blue-200/80 rounded-xl text-xs font-bold hover:bg-blue-100 transition-all active:scale-95"
+                  >
+                    <ArrowRightLeft className="w-4 h-4 text-blue-600" />
+                    <span>Sinkron Peta Tunggakan</span>
+                  </button>
                   <button 
                     onClick={() => setCurrentTab('laporan')}
                     className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-all active:scale-95"
@@ -1681,6 +1691,26 @@ export default function App() {
               className="max-w-7xl mx-auto pb-12"
             >
               <ReportView allData={allData} onRefresh={loadFromGoogleSheet} />
+            </motion.div>
+          )}
+
+          {currentTab === 'sinkronisasi' && (
+            <motion.div
+              key="sinkronisasi"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="max-w-7xl mx-auto pb-12"
+            >
+              <SyncPetaTunggakanView 
+                allData={allData} 
+                onRefreshDatabase={loadFromGoogleSheet}
+                onSendSingleWA={sendWA}
+                onAddToWaBlast={(newItems) => {
+                  setAllData(prev => [...prev, ...newItems]);
+                  syncToGoogleSheet([...allData, ...newItems]);
+                }}
+              />
             </motion.div>
           )}
         </AnimatePresence>
