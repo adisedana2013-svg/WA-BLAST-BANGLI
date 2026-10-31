@@ -30,7 +30,12 @@ import {
   Shield,
   FileCheck,
   PieChart,
-  TrendingUp
+  TrendingUp,
+  Calendar,
+  CheckCheck,
+  History,
+  RotateCcw,
+  LayoutGrid
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TaxPayer, TabType, AppBackup } from './types.ts';
@@ -41,6 +46,63 @@ const STORAGE_KEY = 'samsat_wajib_pajak_data';
 const TEMPLATE_KEY = 'samsat_template_pesan';
 const DEFAULT_TEMPLATE = 'Yth. Bapak/Ibu [Nama], kami informasikan bahwa pajak kendaraan dengan No. Pol [Nopol] akan jatuh tempo pada [Tanggal]. Mohon segera melakukan pembayaran di Samsat Bangli. Terima kasih.';
 
+const INITIAL_DATA: TaxPayer[] = [
+  {
+    nopol: 'DK 4512 PA',
+    nama: 'I Wayan Sudiana',
+    jatuh_tempo: '2025-11-15',
+    no_wa: '6281234567801',
+    status: 'sent',
+    sent_at: '2025-10-24T09:30:00.000Z',
+    timestamp: '2025-10-24T09:30:00.000Z'
+  },
+  {
+    nopol: 'DK 6723 PB',
+    nama: 'Ni Made Rai Artini',
+    jatuh_tempo: '2025-11-04',
+    no_wa: '6281234567802',
+    status: 'sent',
+    sent_at: '2025-10-28T14:15:00.000Z',
+    timestamp: '2025-10-28T14:15:00.000Z'
+  },
+  {
+    nopol: 'DK 8901 PC',
+    nama: 'I Nyoman Suardana',
+    jatuh_tempo: '2025-11-02',
+    no_wa: '6281234567803',
+    status: 'pending',
+    sent_at: '',
+    timestamp: '2025-10-20T08:00:00.000Z'
+  },
+  {
+    nopol: 'DK 2345 PD',
+    nama: 'I Ketut Bagiada',
+    jatuh_tempo: '2025-11-20',
+    no_wa: '6281234567804',
+    status: 'sent',
+    sent_at: '2025-10-29T10:45:00.000Z',
+    timestamp: '2025-10-29T10:45:00.000Z'
+  },
+  {
+    nopol: 'DK 5678 PE',
+    nama: 'Ni Wayan Sukerti',
+    jatuh_tempo: '2025-11-08',
+    no_wa: '6281234567805',
+    status: 'pending',
+    sent_at: '',
+    timestamp: '2025-10-22T11:00:00.000Z'
+  },
+  {
+    nopol: 'DK 3412 PF',
+    nama: 'I Gede Agus Pratama',
+    jatuh_tempo: '2025-10-31',
+    no_wa: '6281234567806',
+    status: 'sent',
+    sent_at: '2025-10-30T08:05:00.000Z',
+    timestamp: '2025-10-30T08:05:00.000Z'
+  }
+];
+
 export default function App() {
   // --- States ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('samsat_auth') === 'true');
@@ -50,9 +112,27 @@ export default function App() {
 
   const [allData, setAllData] = useState<TaxPayer[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
+    if (!saved) return INITIAL_DATA;
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((item: any) => {
+          if (item.status === 'sent' && !item.sent_at) {
+            return {
+              ...item,
+              sent_at: item.timestamp || new Date().toISOString()
+            };
+          }
+          return item;
+        });
+      }
+      return INITIAL_DATA;
+    } catch {
+      return INITIAL_DATA;
+    }
   });
   const [currentTab, setCurrentTab] = useState<TabType>('dashboard');
+  const [blastViewMode, setBlastViewMode] = useState<'grid' | 'table'>('grid');
   const [loading, setLoading] = useState(false);
   const [template, setTemplate] = useState(() => localStorage.getItem(TEMPLATE_KEY) || DEFAULT_TEMPLATE);
   const [useAntiBan, setUseAntiBan] = useState(() => localStorage.getItem('samsat_use_antiban') === 'true');
@@ -129,6 +209,43 @@ export default function App() {
     const date = new Date(d);
     if (isNaN(date.getTime())) return 'Format Tanggal Salah';
     return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
+  const formatSentDateTimeFull = (sentAt?: string, fallbackTimestamp?: string) => {
+    const target = sentAt || fallbackTimestamp;
+    if (!target) return 'Waktu tidak tercatat';
+    try {
+      const dt = new Date(target);
+      if (isNaN(dt.getTime())) return target;
+      const tgl = dt.toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      });
+      const jam = dt.toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      return `${tgl} pk ${jam} WITA`;
+    } catch {
+      return target;
+    }
+  };
+
+  const formatSentDateOnly = (sentAt?: string, fallbackTimestamp?: string) => {
+    const target = sentAt || fallbackTimestamp;
+    if (!target) return '-';
+    try {
+      const dt = new Date(target);
+      if (isNaN(dt.getTime())) return target;
+      return dt.toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      });
+    } catch {
+      return target;
+    }
   };
 
   const daysUntil = (d: string) => {
@@ -234,13 +351,19 @@ export default function App() {
         }
       }
 
+      const isSent = item.status === 'sent' || item.status === 'terkirim' || Boolean(item.sent_at);
+      let sent_at = item.sent_at || '';
+      if (isSent && !sent_at) {
+        sent_at = item.timestamp || new Date().toISOString();
+      }
+
       return {
         nopol,
         nama,
         jatuh_tempo: jatutempo,
         no_wa: formatWA(String(item.no_wa || '')),
-        status: (item.status === 'sent' ? 'sent' : 'pending') as 'pending' | 'sent',
-        sent_at: item.sent_at || '',
+        status: isSent ? ('sent' as const) : ('pending' as const),
+        sent_at: isSent ? sent_at : '',
         timestamp: item.timestamp || new Date().toISOString()
       };
     }).filter(d => d.nopol && d.nama); // Filter out empty entries
@@ -585,11 +708,16 @@ export default function App() {
 
   // --- Export/Backup ---
   const exportCSV = () => {
-    const headers = ['No. Polisi', 'Nama', 'Jatuh Tempo', 'No. WhatsApp', 'Status', 'Waktu Kirim'];
+    const headers = ['No. Polisi', 'Nama', 'Jatuh Tempo', 'No. WhatsApp', 'Status Pesan', 'Keterangan Riwayat WA'];
     const rows = filteredTableData.map(d => [
-      d.nopol, d.nama, d.jatuh_tempo, d.no_wa, d.status, d.sent_at
+      `"${d.nopol}"`,
+      `"${d.nama}"`,
+      `"${d.jatuh_tempo}"`,
+      `"${d.no_wa}"`,
+      `"${d.status === 'sent' ? 'Terkirim' : 'Tertunda'}"`,
+      `"${d.status === 'sent' ? `Sudah di-WA pada ${formatSentDateTimeFull(d.sent_at, d.timestamp)}` : 'Belum pernah di-WA'}"`
     ]);
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -988,8 +1116,8 @@ export default function App() {
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0 ml-2">
-                          <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-100 flex items-center gap-1">
-                            <CheckCircle className="w-3 h-3" /> {formatSentTime(d.sent_at)}
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200 flex items-center gap-1.5">
+                            <CheckCheck className="w-3.5 h-3.5 text-emerald-600" /> {formatSentDateTimeFull(d.sent_at, d.timestamp)}
                           </span>
                         </div>
                       </div>
@@ -1219,16 +1347,39 @@ export default function App() {
                             </div>
                           </td>
                           <td className="px-4 py-4">
-                            <div className={d.status === 'sent' ? 'status-sent' : 'status-pending'}>
-                              {d.status === 'sent' ? 'Terkirim' : 'Tertunda'}
+                            <div className="flex flex-col gap-1">
+                              <div className={d.status === 'sent' ? 'status-sent inline-block w-fit' : 'status-pending inline-block w-fit'}>
+                                {d.status === 'sent' ? 'Terkirim' : 'Tertunda'}
+                              </div>
+                              {d.status === 'sent' ? (
+                                <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
+                                  <CheckCheck className="w-3 h-3 text-emerald-600 inline shrink-0" />
+                                  <span>Sudah di-WA: {formatSentDateTimeFull(d.sent_at, d.timestamp)}</span>
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-medium text-slate-400">
+                                  Belum pernah di-WA
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-8 py-4 text-right">
-                            <div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-all">
-                              <button onClick={() => setEditTarget(d)} className="w-8 h-8 bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:border-blue-200 rounded-lg transition-all">
+                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                              <button 
+                                onClick={() => sendWA(d)} 
+                                title={d.status === 'sent' ? 'Kirim Ulang Pesan WhatsApp' : 'Kirim Pesan WhatsApp'}
+                                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                                  d.status === 'sent' 
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100' 
+                                    : 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm'
+                                }`}
+                              >
+                                {d.status === 'sent' ? <RotateCcw className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
+                              </button>
+                              <button onClick={() => setEditTarget(d)} title="Edit Data" className="w-8 h-8 bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:border-blue-200 rounded-lg transition-all">
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
-                              <button onClick={() => setDeleteTarget(d)} className="w-8 h-8 bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-300 hover:text-rose-500 hover:border-rose-200 rounded-lg transition-all">
+                              <button onClick={() => setDeleteTarget(d)} title="Hapus Data" className="w-8 h-8 bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-300 hover:text-rose-500 hover:border-rose-200 rounded-lg transition-all">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
@@ -1254,33 +1405,98 @@ export default function App() {
               className="space-y-8"
             >
               <div className="elegant-card p-8 bg-white border border-slate-200 shadow-sm rounded-xl">
-                <div className="flex flex-wrap items-center justify-between gap-8 mb-10">
+                {/* Header Blast */}
+                <div className="flex flex-wrap items-center justify-between gap-6 mb-8">
                   <div className="flex items-center gap-5">
-                    <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/20">
+                    <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20">
                       <Send className="w-6 h-6 text-white" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-slate-900 text-xl tracking-tight leading-none">Automasi Pengiriman Pesan</h3>
+                      <h3 className="font-bold text-slate-900 text-xl tracking-tight leading-none">Automasi Pengiriman Pesan (Kirim Data)</h3>
                       <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mt-2 flex items-center gap-2">
-                        <div className="w-2 h-2 bg-emerald-500 rounded-full" /> Protokol Komunikasi Massal
+                        <span className="w-2 h-2 bg-emerald-500 rounded-full inline-block" /> Protokol Komunikasi Massal & Riwayat Kirim WA per No. Polisi
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-4">
+                  
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* View Mode Toggle */}
+                    <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80">
+                      <button
+                        onClick={() => setBlastViewMode('grid')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          blastViewMode === 'grid' 
+                            ? 'bg-white text-slate-900 shadow-xs' 
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        <LayoutGrid className="w-3.5 h-3.5" />
+                        <span>Kartu</span>
+                      </button>
+                      <button
+                        onClick={() => setBlastViewMode('table')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          blastViewMode === 'table' 
+                            ? 'bg-white text-slate-900 shadow-xs' 
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        <List className="w-3.5 h-3.5" />
+                        <span>Tabel</span>
+                      </button>
+                    </div>
+
                     <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${sendingMethod === 'cloud_api' ? 'bg-indigo-50 border-indigo-100 text-indigo-700' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
-                      Metode: {sendingMethod === 'cloud_api' ? '📡 Cloud API' : '💻 WhatsApp Web'}
+                      {sendingMethod === 'cloud_api' ? '📡 Cloud API' : '💻 WhatsApp Web'}
                     </span>
                     <button 
                       onClick={sendBlastAll}
                       disabled={filteredBlastData.filter(d => d.status === 'pending').length === 0}
-                      className="bg-blue-600 disabled:bg-slate-100 disabled:text-slate-300 text-white font-bold px-8 py-3 rounded-lg shadow-lg shadow-blue-600/20 transition-all flex items-center gap-3 active:scale-95 text-sm"
+                      className="bg-blue-600 disabled:bg-slate-100 disabled:text-slate-300 text-white font-bold px-6 py-2.5 rounded-xl shadow-lg shadow-blue-600/20 transition-all flex items-center gap-2.5 active:scale-95 text-xs"
                     >
-                      <MessageCircle className="w-4 h-4" /> Kirim Sekaligus ({filteredBlastData.filter(d => d.status === 'pending').length})
+                      <MessageCircle className="w-4 h-4" /> 
+                      <span>Kirim Sekaligus ({filteredBlastData.filter(d => d.status === 'pending').length} Pending)</span>
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10 p-6 bg-slate-50 rounded-xl border border-slate-100">
+                {/* Status Summary Quick Bar */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 flex items-center justify-between">
+                    <div>
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Target Ditampilkan</p>
+                      <p className="text-xl font-bold text-slate-800 tracking-tight mt-0.5">{filteredBlastData.length} Kendaraan</p>
+                    </div>
+                    <div className="w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-600">
+                      <Database className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200/80 flex items-center justify-between">
+                    <div>
+                      <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">Sudah Pernah di-WA</p>
+                      <p className="text-xl font-bold text-emerald-900 tracking-tight mt-0.5">
+                        {filteredBlastData.filter(d => d.status === 'sent').length} Kendaraan
+                      </p>
+                    </div>
+                    <div className="w-10 h-10 rounded-lg bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-700">
+                      <CheckCheck className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 flex items-center justify-between">
+                    <div>
+                      <p className="text-[11px] font-bold text-amber-700 uppercase tracking-wider">Belum Pernah di-WA</p>
+                      <p className="text-xl font-bold text-amber-900 tracking-tight mt-0.5">
+                        {filteredBlastData.filter(d => d.status !== 'sent').length} Kendaraan
+                      </p>
+                    </div>
+                    <div className="w-10 h-10 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700">
+                      <Clock className="w-5 h-5" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filters */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-slate-50 rounded-xl border border-slate-100">
                   <div className="space-y-2">
                     <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider ml-1">Cari Nama / No. Polisi</label>
                     <div className="relative">
@@ -1289,7 +1505,7 @@ export default function App() {
                         type="text" 
                         value={blastFilterSearch} 
                         onChange={e => setBlastFilterSearch(e.target.value)}
-                        placeholder="Contoh: Budi / DK..."
+                        placeholder="Contoh: Sudiana / DK 4512..."
                         className="w-full bg-white border border-slate-200 rounded-lg pl-10 pr-4 py-2.5 text-sm font-semibold text-slate-600 outline-none focus:border-blue-600 shadow-sm transition-all"
                       />
                       {blastFilterSearch && (
@@ -1325,48 +1541,225 @@ export default function App() {
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider ml-1">Status Verifikasi</label>
+                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider ml-1">Filter Status Pengiriman</label>
                     <select value={blastFilterStatus} onChange={e => setBlastFilterStatus(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-semibold text-slate-600 outline-none focus:border-blue-600 shadow-sm transition-all">
-                      <option value="all">Semua Status</option>
-                      <option value="pending">Belum Terkirim</option>
-                      <option value="sent">Sudah Terkirim</option>
+                      <option value="all">Semua Status ({allData.length})</option>
+                      <option value="pending">Belum Pernah di-WA ({stats.pending})</option>
+                      <option value="sent">Sudah Pernah di-WA ({stats.sent})</option>
                     </select>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-auto pr-2 custom-scrollbar">
-                  {filteredBlastData.length === 0 ? (
-                    <div className="col-span-full py-32 text-center text-slate-300 flex flex-col items-center gap-4">
-                      <div className="p-6 bg-slate-50 rounded-full border border-slate-100">
-                        <Search className="w-8 h-8 opacity-20" />
-                      </div>
-                      <span className="text-xs font-bold uppercase tracking-widest opacity-50 italic">Tidak ada data yang sesuai filter</span>
-                    </div>
-                  ) : filteredBlastData.map(d => (
-                    <div key={d.nopol} className="bg-white p-5 rounded-xl border border-slate-100 flex items-center justify-between gap-4 hover:border-blue-200 hover:shadow-md transition-all group relative">
-                      {d.status === 'sent' && <div className="absolute top-0 right-0 p-1.5 bg-emerald-500 text-white rounded-tr-xl rounded-bl-xl shadow-sm"><CheckCircle className="w-3 h-3" /></div>}
-                      <div className="min-w-0">
-                        <h4 className="font-bold text-slate-900 text-[15px] truncate tracking-tight mb-1">{d.nama}</h4>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded border border-slate-100 uppercase tracking-wider">{d.nopol}</span>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{d.no_wa}</span>
+                {/* View: Grid or Table */}
+                {blastViewMode === 'grid' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 max-h-[600px] overflow-auto pr-2 custom-scrollbar">
+                    {filteredBlastData.length === 0 ? (
+                      <div className="col-span-full py-28 text-center text-slate-300 flex flex-col items-center gap-3">
+                        <div className="p-6 bg-slate-50 rounded-full border border-slate-100">
+                          <Search className="w-8 h-8 opacity-20" />
                         </div>
-                        <div className={`mt-3 inline-flex items-center gap-2 font-bold text-[9px] uppercase tracking-wider px-3 py-1 rounded-md ${daysUntil(d.jatuh_tempo) < 0 ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-amber-50 text-amber-600 border border-amber-100'}`}>
-                           {formatDate(d.jatuh_tempo)}
-                        </div>
+                        <span className="text-xs font-bold uppercase tracking-widest opacity-60">Tidak ada data yang sesuai filter</span>
                       </div>
-                      <button 
-                        onClick={() => sendWA(d)}
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all active:scale-90 shadow-sm ${
-                          d.status === 'sent' ? 'bg-slate-50 text-slate-300 hover:text-blue-600 hover:bg-white border border-slate-200' : 'bg-emerald-500 text-white shadow-emerald-500/20 hover:bg-emerald-600'
-                        }`}
-                        title="Kirim Pesan Manual"
-                      >
-                        <Send className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                    ) : (
+                      filteredBlastData.map(d => {
+                        const isSent = d.status === 'sent';
+                        return (
+                          <div 
+                            key={d.nopol} 
+                            className={`p-5 rounded-2xl border transition-all flex flex-col justify-between ${
+                              isSent 
+                                ? 'bg-gradient-to-b from-emerald-50/50 via-white to-white border-emerald-200/90 shadow-sm hover:border-emerald-400' 
+                                : 'bg-white border-slate-200/90 shadow-sm hover:border-blue-200'
+                            }`}
+                          >
+                            <div>
+                              {/* Top Bar Card */}
+                              <div className="flex items-start justify-between gap-3 mb-3">
+                                <span className="px-3 py-1 bg-slate-900 text-white rounded-lg text-xs font-extrabold tracking-wider inline-block shadow-sm">
+                                  {d.nopol}
+                                </span>
+                                {isSent ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold shadow-xs">
+                                    <CheckCheck className="w-3.5 h-3.5 text-emerald-600" /> Sudah Pernah di-WA
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold">
+                                    <Clock className="w-3.5 h-3.5 text-slate-400" /> Belum di-WA
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Owner & WA */}
+                              <h4 className="font-bold text-slate-900 text-base tracking-tight mb-1 truncate" title={d.nama}>
+                                {d.nama}
+                              </h4>
+                              <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold">
+                                <MessageCircle className="w-3.5 h-3.5 text-emerald-500" />
+                                <span>{d.no_wa}</span>
+                              </div>
+
+                              {/* Due date */}
+                              <div className="mt-3 flex items-center justify-between gap-2 pt-2.5 border-t border-slate-100 text-xs">
+                                <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider">Jatuh Tempo:</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-700">{formatDate(d.jatuh_tempo)}</span>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                    daysUntil(d.jatuh_tempo) < 0 
+                                      ? 'bg-rose-50 text-rose-600 border border-rose-100' 
+                                      : 'bg-amber-50 text-amber-600 border border-amber-100'
+                                  }`}>
+                                    {daysUntil(d.jatuh_tempo) < 0 ? `+${Math.abs(daysUntil(d.jatuh_tempo))} Hari` : `${daysUntil(d.jatuh_tempo)} Hari Lagi`}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* KETERANGAN TANGGAL KIRIM WA */}
+                              {isSent ? (
+                                <div className="mt-3.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+                                  <div className="flex items-center gap-1.5 text-emerald-900 font-bold text-xs">
+                                    <CheckCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                                    <span>Keterangan Riwayat WA:</span>
+                                  </div>
+                                  <p className="text-xs text-emerald-800 font-medium mt-1 pl-5 leading-snug">
+                                    No. Polisi ini <strong className="text-emerald-950 font-bold underline decoration-emerald-400">sudah pernah di-WA</strong> pada tanggal:
+                                  </p>
+                                  <div className="mt-1 pl-5 flex items-center gap-1.5 text-xs font-bold text-emerald-950">
+                                    <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                    <span>{formatSentDateTimeFull(d.sent_at, d.timestamp)}</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="mt-3.5 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                                  <div className="flex items-center gap-1.5 text-slate-700 font-bold text-xs">
+                                    <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                                    <span>Keterangan Riwayat WA:</span>
+                                  </div>
+                                  <p className="text-xs text-slate-500 font-medium mt-1 pl-5 leading-snug">
+                                    No. Polisi ini <strong className="text-slate-700 font-bold">belum pernah dikirimkan</strong> pesan WhatsApp
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Action Button */}
+                            <div className="mt-4 pt-3 border-t border-slate-100">
+                              {isSent ? (
+                                <button 
+                                  onClick={() => sendWA(d)}
+                                  className="w-full py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xs"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Kirim Ulang WA</span>
+                                </button>
+                              ) : (
+                                <button 
+                                  onClick={() => sendWA(d)}
+                                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all active:scale-95 shadow-md shadow-blue-600/20"
+                                >
+                                  <Send className="w-3.5 h-3.5 text-white" />
+                                  <span>Kirim WA Sekarang</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                ) : (
+                  /* View Mode: Table */
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-sm">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-[10px] uppercase font-bold tracking-widest">
+                          <th className="px-5 py-4 w-14 text-center">No</th>
+                          <th className="px-4 py-4 w-36">No. Polisi</th>
+                          <th className="px-4 py-4">Nama Pemilik</th>
+                          <th className="px-4 py-4 w-36">No. WhatsApp</th>
+                          <th className="px-4 py-4 w-44">Jatuh Tempo</th>
+                          <th className="px-5 py-4">Keterangan Riwayat WA</th>
+                          <th className="px-5 py-4 text-right w-36">Aksi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {filteredBlastData.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="py-20 text-center text-slate-300 font-medium">
+                              Tidak ada data yang sesuai filter
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredBlastData.map((d, idx) => {
+                            const isSent = d.status === 'sent';
+                            return (
+                              <tr key={d.nopol} className={`hover:bg-slate-50/80 transition-all ${isSent ? 'bg-emerald-50/20' : ''}`}>
+                                <td className="px-5 py-4 text-center font-mono text-slate-400 text-xs font-bold">
+                                  {(idx + 1).toString().padStart(2, '0')}
+                                </td>
+                                <td className="px-4 py-4">
+                                  <span className="px-3 py-1 bg-slate-900 text-white rounded-md text-xs font-extrabold tracking-wider inline-block">
+                                    {d.nopol}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-4">
+                                  <span className="font-bold text-slate-900 text-sm block">{d.nama}</span>
+                                </td>
+                                <td className="px-4 py-4 font-mono font-medium text-slate-600">
+                                  {d.no_wa}
+                                </td>
+                                <td className="px-4 py-4">
+                                  <span className="font-semibold text-slate-700 block">{formatDate(d.jatuh_tempo)}</span>
+                                  <span className={`text-[10px] font-bold ${daysUntil(d.jatuh_tempo) < 0 ? 'text-rose-600' : 'text-amber-600'}`}>
+                                    {daysUntil(d.jatuh_tempo) < 0 ? `Telat ${Math.abs(daysUntil(d.jatuh_tempo))} Hari` : `${daysUntil(d.jatuh_tempo)} Hari Lagi`}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-4">
+                                  {isSent ? (
+                                    <div className="flex flex-col gap-1">
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold w-fit">
+                                        <CheckCheck className="w-3.5 h-3.5 text-emerald-600" /> Sudah Pernah di-WA
+                                      </span>
+                                      <span className="text-[11px] font-bold text-emerald-900 flex items-center gap-1.5 mt-0.5">
+                                        <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                                        {formatSentDateTimeFull(d.sent_at, d.timestamp)}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-[11px] font-medium w-fit">
+                                        <Clock className="w-3.5 h-3.5 text-slate-400" /> Belum Pernah di-WA
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 italic">Status: Pending</span>
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="px-5 py-4 text-right">
+                                  {isSent ? (
+                                    <button 
+                                      onClick={() => sendWA(d)}
+                                      className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-lg text-xs inline-flex items-center gap-1.5 transition-all active:scale-95 shadow-xs"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5 text-emerald-600" />
+                                      <span>Kirim Ulang</span>
+                                    </button>
+                                  ) : (
+                                    <button 
+                                      onClick={() => sendWA(d)}
+                                      className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs inline-flex items-center gap-1.5 transition-all active:scale-95 shadow-sm shadow-blue-600/20"
+                                    >
+                                      <Send className="w-3.5 h-3.5 text-white" />
+                                      <span>Kirim WA</span>
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
