@@ -145,12 +145,6 @@ export default function App() {
     return (localStorage.getItem('samsat_sending_method') as 'wa_web' | 'cloud_api' | 'device') || 'wa_web';
   });
   const [waConfig, setWaConfig] = useState<{ configured: boolean; hasToken: boolean; hasPhoneId: boolean } | null>(null);
-  const [waServerUrl, setWaServerUrl] = useState<string>(() => {
-    const saved = localStorage.getItem('samsat_wa_server_url');
-    if (saved !== null) return saved;
-    const envUrl = (import.meta as any).env?.VITE_WA_SERVER_URL;
-    return typeof envUrl === 'string' ? envUrl : '';
-  });
   const [waDeviceStatus, setWaDeviceStatus] = useState<WaDeviceStatus>({
     status: 'disconnected',
     qrDataUrl: null,
@@ -193,53 +187,11 @@ export default function App() {
     }
   }, [sendingMethod]);
 
-  const showToast = useCallback((msg: string, type: 'success' | 'error' | 'warn' | 'info' = 'success') => {
-    const id = Date.now();
-    setToasts(prev => [...prev, { id, msg, type }]);
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 3000);
-  }, []);
-
-  const buildWaApiUrl = useCallback(
-    (endpoint: string) => {
-      const base = waServerUrl.trim().replace(/\/+$/, '');
-      return base ? `${base}${endpoint}` : endpoint;
-    },
-    [waServerUrl]
-  );
-
-  const safeParseResponse = async (res: Response) => {
-    const text = await res.text();
-    if (!text) return {};
-    try {
-      return JSON.parse(text);
-    } catch {
-      const trimmed = text.trim();
-      if (res.status === 404) {
-        const err = new Error(
-          'Endpoint WhatsApp Gateway tidak ditemukan (404). Jika menggunakan Vercel, isi URL Server WA Gateway terlebih dahulu.'
-        );
-        (err as any).isServerless404 = true;
-        throw err;
-      }
-      const looksLikeGatewayError =
-        res.status >= 500 ||
-        trimmed.startsWith('<') ||
-        trimmed.toLowerCase().includes('the page');
-      throw new Error(
-        looksLikeGatewayError
-          ? `Server backend sedang memulai ulang atau belum aktif (${res.status}). Tunggu beberapa detik lalu coba lagi.`
-          : `Respons server tidak valid (${res.status}).`
-      );
-    }
-  };
-
   const checkWaConfigStatus = async () => {
     try {
       const res = await fetch('/api/whatsapp-status');
       if (res.ok) {
-        const data = await safeParseResponse(res);
+        const data = await res.json();
         setWaConfig(data);
       }
     } catch (e) {
@@ -249,20 +201,9 @@ export default function App() {
 
   const checkWaDeviceStatus = useCallback(async () => {
     try {
-      const res = await fetch(buildWaApiUrl('/api/wa-device/status'));
-      if (res.status === 404) {
-        setWaDeviceStatus({
-          status: 'disconnected',
-          qrDataUrl: null,
-          qrUpdatedAt: null,
-          device: null,
-          lastError: null,
-          serverlessUnconfigured: true
-        });
-        return;
-      }
+      const res = await fetch('/api/wa-device/status');
       if (res.ok) {
-        const data: WaDeviceStatus = await safeParseResponse(res);
+        const data: WaDeviceStatus = await res.json();
         setWaDeviceStatus(prev => {
           if (prev.status !== 'connected' && data.status === 'connected') {
             setSendingMethod('device');
@@ -270,184 +211,39 @@ export default function App() {
           return data;
         });
       }
-    } catch (e: any) {
-      if (e?.isServerless404) {
-        setWaDeviceStatus({
-          status: 'disconnected',
-          qrDataUrl: null,
-          qrUpdatedAt: null,
-          device: null,
-          lastError: null,
-          serverlessUnconfigured: true
-        });
-        return;
-      }
+    } catch (e) {
       console.error('Gagal mengecek status perangkat WhatsApp', e);
     }
-  }, [buildWaApiUrl]);
-
-  const saveWaServerUrl = useCallback(
-    async (rawUrl: string): Promise<boolean> => {
-      const trimmed = rawUrl.trim().replace(/\/+$/, '');
-      if (!trimmed) {
-        localStorage.removeItem('samsat_wa_server_url');
-        setWaServerUrl('');
-        try {
-          const res = await fetch('/api/wa-device/status');
-          if (res.ok) {
-            const data: WaDeviceStatus = await safeParseResponse(res);
-            setWaDeviceStatus(data);
-          } else {
-            setWaDeviceStatus({
-              status: 'disconnected',
-              qrDataUrl: null,
-              qrUpdatedAt: null,
-              device: null,
-              lastError: null,
-              serverlessUnconfigured: res.status === 404
-            });
-          }
-        } catch {
-          setWaDeviceStatus({
-            status: 'disconnected',
-            qrDataUrl: null,
-            qrUpdatedAt: null,
-            device: null,
-            lastError: null
-          });
-        }
-        showToast('URL Server Gateway direset ke bawaan', 'info');
-        return true;
-      }
-
-      const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-      try {
-        new URL(normalized);
-      } catch {
-        showToast('Format URL server tidak valid. Contoh: https://wa-gateway.up.railway.app', 'error');
-        return false;
-      }
-
-      try {
-        const res = await fetch(`${normalized}/api/wa-device/status`);
-        const data = await safeParseResponse(res);
-        if (!res.ok || typeof data.status !== 'string') {
-          showToast(
-            data?.error || `Server gateway merespons status ${res.status}, bukan endpoint SAMSAT WA Gateway.`,
-            'error'
-          );
-          return false;
-        }
-        localStorage.setItem('samsat_wa_server_url', normalized);
-        setWaServerUrl(normalized);
-        setWaDeviceStatus({
-          status: data.status,
-          qrDataUrl: data.qrDataUrl || null,
-          qrUpdatedAt: data.qrUpdatedAt || null,
-          device: data.device || null,
-          lastError: data.lastError || null,
-          serverlessUnconfigured: !!data.serverlessUnconfigured
-        });
-        showToast('Berhasil terhubung ke Server WA Gateway!', 'success');
-        return true;
-      } catch (e: any) {
-        showToast(
-          e?.message || 'Tidak dapat menjangkau Server WA Gateway. Pastikan URL benar dan server aktif.',
-          'error'
-        );
-        return false;
-      }
-    },
-    [showToast]
-  );
+  }, []);
 
   const connectWaDevice = useCallback(async (fresh = false) => {
-    const attemptConnect = async () => {
-      const res = await fetch(buildWaApiUrl('/api/wa-device/connect'), {
+    try {
+      const res = await fetch('/api/wa-device/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fresh })
       });
-      const data = await safeParseResponse(res);
-      return { res, data };
-    };
-
-    try {
-      let { res, data } = await attemptConnect();
-      if (!res.ok && res.status >= 502) {
-        await new Promise(r => setTimeout(r, 1500));
-        ({ res, data } = await attemptConnect());
-      }
-
+      const data = await res.json();
       if (res.ok) {
         setWaDeviceStatus({
           status: data.status || 'connecting',
           qrDataUrl: data.qrDataUrl || null,
           qrUpdatedAt: data.qrUpdatedAt || null,
           device: data.device || null,
-          lastError: data.lastError || null,
-          serverlessUnconfigured: !!data.serverlessUnconfigured
+          lastError: data.lastError || null
         });
-      } else if (data?.serverlessUnconfigured || data?.code === 'SERVERLESS_UNSUPPORTED' || res.status === 404) {
-        const msg =
-          data?.error ||
-          'Fitur Perangkat QR membutuhkan Server WA Gateway (Node.js) karena Vercel tidak mendukung koneksi WebSocket persisten.';
-        setWaDeviceStatus({
-          status: 'disconnected',
-          qrDataUrl: null,
-          qrUpdatedAt: null,
-          device: null,
-          lastError: msg,
-          serverlessUnconfigured: true
-        });
-        showToast('Isi URL Server WA Gateway di menu Perangkat untuk scan QR di Vercel.', 'warn');
       } else {
-        const errMsg = data?.error || 'Gagal memulai koneksi WhatsApp';
-        setWaDeviceStatus(prev => ({ ...prev, status: 'error', lastError: errMsg }));
-        showToast(errMsg, 'error');
+        showToast(data.error || 'Gagal memulai koneksi WhatsApp', 'error');
       }
     } catch (e: any) {
-      if (e?.isServerless404) {
-        setWaDeviceStatus({
-          status: 'disconnected',
-          qrDataUrl: null,
-          qrUpdatedAt: null,
-          device: null,
-          lastError: e.message,
-          serverlessUnconfigured: true
-        });
-        showToast('Isi URL Server WA Gateway di menu Perangkat untuk scan QR di Vercel.', 'warn');
-        return;
-      }
-
-      // Retry once automatically in case server just woke up or restarted
-      try {
-        await new Promise(r => setTimeout(r, 1500));
-        const { res, data } = await attemptConnect();
-        if (res.ok) {
-          setWaDeviceStatus({
-            status: data.status || 'connecting',
-            qrDataUrl: data.qrDataUrl || null,
-            qrUpdatedAt: data.qrUpdatedAt || null,
-            device: data.device || null,
-            lastError: data.lastError || null,
-            serverlessUnconfigured: !!data.serverlessUnconfigured
-          });
-          return;
-        }
-      } catch {
-        // Fall through to error display
-      }
-      const msg = e?.message || 'Gagal menghubungi server perangkat';
-      setWaDeviceStatus(prev => ({ ...prev, status: 'error', lastError: msg }));
-      showToast(msg, 'error');
+      showToast(e?.message || 'Gagal menghubungi server perangkat', 'error');
     }
-  }, [buildWaApiUrl, showToast]);
+  }, []);
 
   const disconnectWaDevice = useCallback(async () => {
     try {
-      const res = await fetch(buildWaApiUrl('/api/wa-device/disconnect'), { method: 'POST' });
-      const data = await safeParseResponse(res);
+      const res = await fetch('/api/wa-device/disconnect', { method: 'POST' });
+      const data = await res.json();
       if (res.ok) {
         setWaDeviceStatus({
           status: data.status || 'disconnected',
@@ -461,7 +257,7 @@ export default function App() {
     } catch (e: any) {
       showToast(e?.message || 'Gagal memutuskan perangkat', 'error');
     }
-  }, [buildWaApiUrl, showToast]);
+  }, []);
 
   useEffect(() => {
     // Initial fetch from Google Sheet and check WA config + device status
@@ -472,7 +268,7 @@ export default function App() {
 
   useEffect(() => {
     const shouldPoll =
-      (currentTab === 'perangkat' && !waDeviceStatus.serverlessUnconfigured) ||
+      currentTab === 'perangkat' ||
       waDeviceStatus.status === 'connecting' ||
       waDeviceStatus.status === 'qr';
     if (!shouldPoll) return;
@@ -481,9 +277,16 @@ export default function App() {
       checkWaDeviceStatus();
     }, 2000);
     return () => clearInterval(interval);
-  }, [currentTab, waDeviceStatus.status, waDeviceStatus.serverlessUnconfigured, checkWaDeviceStatus]);
+  }, [currentTab, waDeviceStatus.status, checkWaDeviceStatus]);
 
   // --- Helpers ---
+  const showToast = useCallback((msg: string, type: 'success' | 'error' | 'warn' | 'info' = 'success') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, msg, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
+  }, []);
 
   const formatDate = (d: string) => {
     if (!d) return '-';
@@ -776,12 +579,12 @@ export default function App() {
       }
       showToast('📤 Mengirim pesan via Perangkat Tertaut...', 'info');
       try {
-        const res = await fetch(buildWaApiUrl('/api/wa-device/send'), {
+        const res = await fetch('/api/wa-device/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: item.no_wa, message: msg })
         });
-        const data = await safeParseResponse(res);
+        const data = await res.json();
         if (data.success) {
           const updated = { ...item, status: 'sent' as const, sent_at: new Date().toISOString() };
           setAllData(prev => prev.map(d => d.nopol === item.nopol ? updated : d));
@@ -801,7 +604,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: item.no_wa, message: msg })
         });
-        const data = await safeParseResponse(res);
+        const data = await res.json();
         if (data.success) {
           const updated = { ...item, status: 'sent' as const, sent_at: new Date().toISOString() };
           setAllData(prev => prev.map(d => d.nopol === item.nopol ? updated : d));
@@ -847,8 +650,7 @@ export default function App() {
         return;
       }
 
-      const endpoint =
-        sendingMethod === 'device' ? buildWaApiUrl('/api/wa-device/send') : '/api/send-whatsapp';
+      const endpoint = sendingMethod === 'device' ? '/api/wa-device/send' : '/api/send-whatsapp';
       setBlastProgress({ total: list.length, sent: 0, active: true, currentName: '', errors: [] });
       
       let sentCount = 0;
@@ -866,7 +668,7 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ to: item.no_wa, message: msg })
           });
-          const resData = await safeParseResponse(res);
+          const resData = await res.json();
           if (resData.success) {
             sentCount++;
             const now = new Date().toISOString();
@@ -2486,9 +2288,6 @@ export default function App() {
                 }}
                 onOpenBlast={() => setCurrentTab('blast')}
                 isAdmin={userRole === 'admin'}
-                waServerUrl={waServerUrl}
-                onSaveWaServerUrl={saveWaServerUrl}
-                buildWaApiUrl={buildWaApiUrl}
               />
             </motion.div>
           )}
