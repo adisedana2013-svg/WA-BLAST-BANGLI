@@ -8,7 +8,25 @@ export interface TaxPayer {
   timestamp: string;
 }
 
-export type TabType = 'dashboard' | 'data' | 'blast' | 'template' | 'laporan' | 'statistik' | 'sinkronisasi';
+export type TabType = 'dashboard' | 'perangkat' | 'data' | 'blast' | 'template' | 'laporan' | 'statistik' | 'sinkronisasi';
+
+export interface WaDeviceInfo {
+  id: string;
+  phone: string;
+  name: string;
+  platform: string;
+  connectedAt: string;
+}
+
+export type WaConnectionPhase = 'disconnected' | 'connecting' | 'qr' | 'connected' | 'error';
+
+export interface WaDeviceStatus {
+  status: WaConnectionPhase;
+  qrDataUrl: string | null;
+  qrUpdatedAt: number | null;
+  device: WaDeviceInfo | null;
+  lastError: string | null;
+}
 
 export interface AppBackup {
   version: string;

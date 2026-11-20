@@ -35,11 +35,14 @@ import {
   CheckCheck,
   History,
   RotateCcw,
-  LayoutGrid
+  LayoutGrid,
+  Smartphone,
+  QrCode
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { TaxPayer, TabType, AppBackup } from './types.ts';
+import { TaxPayer, TabType, AppBackup, WaDeviceStatus } from './types.ts';
 import { ReportView } from './components/ReportView.tsx';
+import { DeviceView } from './components/DeviceView.tsx';
 
 const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbxs6dijT3fsPRDZ_CFc9BTuYbo6nvXEsOHozJyIqrCKz169W8Etg67OgxvpPEcU2aZC/exec";
 const STORAGE_KEY = 'samsat_wajib_pajak_data';
@@ -138,10 +141,17 @@ export default function App() {
   const [useAntiBan, setUseAntiBan] = useState(() => localStorage.getItem('samsat_use_antiban') === 'true');
   const [previewTrigger, setPreviewTrigger] = useState(0);
   const [toasts, setToasts] = useState<{ id: number; msg: string; type: 'success' | 'error' | 'warn' | 'info' }[]>([]);
-  const [sendingMethod, setSendingMethod] = useState<'wa_web' | 'cloud_api'>(() => {
-    return (localStorage.getItem('samsat_sending_method') as 'wa_web' | 'cloud_api') || 'wa_web';
+  const [sendingMethod, setSendingMethod] = useState<'wa_web' | 'cloud_api' | 'device'>(() => {
+    return (localStorage.getItem('samsat_sending_method') as 'wa_web' | 'cloud_api' | 'device') || 'wa_web';
   });
   const [waConfig, setWaConfig] = useState<{ configured: boolean; hasToken: boolean; hasPhoneId: boolean } | null>(null);
+  const [waDeviceStatus, setWaDeviceStatus] = useState<WaDeviceStatus>({
+    status: 'disconnected',
+    qrDataUrl: null,
+    qrUpdatedAt: null,
+    device: null,
+    lastError: null
+  });
   const [blastProgress, setBlastProgress] = useState<{ total: number; sent: number; active: boolean; currentName: string; errors: string[] } | null>(null);
   
   // Modals
@@ -189,11 +199,85 @@ export default function App() {
     }
   };
 
+  const checkWaDeviceStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/wa-device/status');
+      if (res.ok) {
+        const data: WaDeviceStatus = await res.json();
+        setWaDeviceStatus(prev => {
+          if (prev.status !== 'connected' && data.status === 'connected') {
+            setSendingMethod('device');
+          }
+          return data;
+        });
+      }
+    } catch (e) {
+      console.error('Gagal mengecek status perangkat WhatsApp', e);
+    }
+  }, []);
+
+  const connectWaDevice = useCallback(async (fresh = false) => {
+    try {
+      const res = await fetch('/api/wa-device/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fresh })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setWaDeviceStatus({
+          status: data.status || 'connecting',
+          qrDataUrl: data.qrDataUrl || null,
+          qrUpdatedAt: data.qrUpdatedAt || null,
+          device: data.device || null,
+          lastError: data.lastError || null
+        });
+      } else {
+        showToast(data.error || 'Gagal memulai koneksi WhatsApp', 'error');
+      }
+    } catch (e: any) {
+      showToast(e?.message || 'Gagal menghubungi server perangkat', 'error');
+    }
+  }, []);
+
+  const disconnectWaDevice = useCallback(async () => {
+    try {
+      const res = await fetch('/api/wa-device/disconnect', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setWaDeviceStatus({
+          status: data.status || 'disconnected',
+          qrDataUrl: null,
+          qrUpdatedAt: null,
+          device: null,
+          lastError: null
+        });
+        showToast('Perangkat WhatsApp berhasil diputuskan', 'info');
+      }
+    } catch (e: any) {
+      showToast(e?.message || 'Gagal memutuskan perangkat', 'error');
+    }
+  }, []);
+
   useEffect(() => {
-    // Initial fetch from Google Sheet and check WA config status
+    // Initial fetch from Google Sheet and check WA config + device status
     loadFromGoogleSheet();
     checkWaConfigStatus();
-  }, []);
+    checkWaDeviceStatus();
+  }, [checkWaDeviceStatus]);
+
+  useEffect(() => {
+    const shouldPoll =
+      currentTab === 'perangkat' ||
+      waDeviceStatus.status === 'connecting' ||
+      waDeviceStatus.status === 'qr';
+    if (!shouldPoll) return;
+
+    const interval = setInterval(() => {
+      checkWaDeviceStatus();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [currentTab, waDeviceStatus.status, checkWaDeviceStatus]);
 
   // --- Helpers ---
   const showToast = useCallback((msg: string, type: 'success' | 'error' | 'warn' | 'info' = 'success') => {
@@ -487,6 +571,31 @@ export default function App() {
       setAllData(prev => prev.map(d => d.nopol === item.nopol ? updated : d));
       syncToGoogleSheet(allData.map(d => d.nopol === item.nopol ? updated : d));
       showToast('📱 Membuka WhatsApp Web...');
+    } else if (sendingMethod === 'device') {
+      if (waDeviceStatus.status !== 'connected') {
+        showToast('Perangkat WhatsApp belum terhubung. Silakan scan barcode di menu Perangkat.', 'warn');
+        setCurrentTab('perangkat');
+        return;
+      }
+      showToast('📤 Mengirim pesan via Perangkat Tertaut...', 'info');
+      try {
+        const res = await fetch('/api/wa-device/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: item.no_wa, message: msg })
+        });
+        const data = await res.json();
+        if (data.success) {
+          const updated = { ...item, status: 'sent' as const, sent_at: new Date().toISOString() };
+          setAllData(prev => prev.map(d => d.nopol === item.nopol ? updated : d));
+          syncToGoogleSheet(allData.map(d => d.nopol === item.nopol ? updated : d));
+          showToast(`✅ Pesan berhasil dikirim ke ${item.nama}!`);
+        } else {
+          showToast(`❌ Gagal: ${data.error}`, 'error');
+        }
+      } catch (err: any) {
+        showToast(`❌ Terjadi kesalahan: ${err.message || err}`, 'error');
+      }
     } else {
       showToast('📤 Mengirim pesan via WhatsApp Cloud API...', 'info');
       try {
@@ -535,6 +644,13 @@ export default function App() {
       syncToGoogleSheet(newData);
       showToast(`📤 Membuka ${list.length} chat WhatsApp...`);
     } else {
+      if (sendingMethod === 'device' && waDeviceStatus.status !== 'connected') {
+        showToast('Perangkat WhatsApp belum terhubung. Silakan scan barcode di menu Perangkat.', 'warn');
+        setCurrentTab('perangkat');
+        return;
+      }
+
+      const endpoint = sendingMethod === 'device' ? '/api/wa-device/send' : '/api/send-whatsapp';
       setBlastProgress({ total: list.length, sent: 0, active: true, currentName: '', errors: [] });
       
       let sentCount = 0;
@@ -547,7 +663,7 @@ export default function App() {
         const msg = formatMessage(item);
 
         try {
-          const res = await fetch('/api/send-whatsapp', {
+          const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ to: item.no_wa, message: msg })
@@ -566,7 +682,7 @@ export default function App() {
           errorsList.push(`${item.nama} (${item.nopol}): ${err.message || err}`);
         }
 
-        await new Promise(resolve => setTimeout(resolve, 800));
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
       syncToGoogleSheet(updatedData);
@@ -927,6 +1043,7 @@ export default function App() {
         <div className="px-4 py-6 space-y-1 flex-1">
           {[
             { id: 'dashboard' as TabType, icon: LayoutDashboard, label: 'Dashboard' },
+            { id: 'perangkat' as TabType, icon: Smartphone, label: 'Perangkat' },
             { id: 'data' as TabType, icon: Database, label: 'Basis Data' },
             { id: 'blast' as TabType, icon: MessageCircle, label: 'Kirim Pesan', adminOnly: true },
             { id: 'template' as TabType, icon: FileText, label: 'Format Pesan', adminOnly: true },
@@ -936,14 +1053,23 @@ export default function App() {
             <button
               key={item.id}
               onClick={() => setCurrentTab(item.id)}
-              className={`sidebar-link w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`sidebar-link w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 currentTab === item.id 
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-600/10 active:scale-95' 
                   : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
-              <item.icon className={`w-5 h-5 ${currentTab === item.id ? 'text-white' : 'text-slate-400'}`} />
-              <span>{item.label}</span>
+              <span className="flex items-center gap-3 whitespace-nowrap">
+                <item.icon className={`w-5 h-5 ${currentTab === item.id ? 'text-white' : 'text-slate-400'}`} />
+                <span>{item.label}</span>
+              </span>
+              {item.id === 'perangkat' && waDeviceStatus.status === 'connected' && (
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
+                  currentTab === 'perangkat' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
+                }`}>
+                  Aktif
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -985,7 +1111,19 @@ export default function App() {
         <header className="h-20 bg-white border-b border-slate-200 px-8 flex items-center justify-between flex-shrink-0 relative z-30">
           <div className="flex items-center gap-6">
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-              {currentTab === 'dashboard' ? 'Ringkasan Laporan' : currentTab === 'data' ? 'Basis Data Wajib Pajak' : currentTab === 'blast' ? 'Automasi Pengiriman' : currentTab === 'template' ? 'Konfigurasi Pesan' : currentTab === 'laporan' ? 'Laporan Status & Distribusi Pajak' : 'Analisis Statistik'}
+              {currentTab === 'dashboard'
+                ? 'Ringkasan Laporan'
+                : currentTab === 'perangkat'
+                ? 'Perangkat WhatsApp'
+                : currentTab === 'data'
+                ? 'Basis Data Wajib Pajak'
+                : currentTab === 'blast'
+                ? 'Automasi Pengiriman'
+                : currentTab === 'template'
+                ? 'Konfigurasi Pesan'
+                : currentTab === 'laporan'
+                ? 'Laporan Status & Distribusi Pajak'
+                : 'Analisis Statistik'}
             </h1>
             <div className="w-px h-6 bg-slate-200" />
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Aplikasi Samsat v2.4</span>
@@ -1446,9 +1584,35 @@ export default function App() {
                       </button>
                     </div>
 
-                    <span className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${sendingMethod === 'cloud_api' ? 'bg-indigo-50 border-indigo-100 text-indigo-700' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
-                      {sendingMethod === 'cloud_api' ? '📡 Cloud API' : '💻 WhatsApp Web'}
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentTab('perangkat')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                        sendingMethod === 'device'
+                          ? waDeviceStatus.status === 'connected'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                            : 'bg-amber-50 border-amber-200 text-amber-700'
+                          : sendingMethod === 'cloud_api'
+                          ? 'bg-indigo-50 border-indigo-100 text-indigo-700'
+                          : 'bg-slate-50 border-slate-200 text-slate-700'
+                      }`}
+                      title="Kelola Perangkat WhatsApp"
+                    >
+                      {sendingMethod === 'device' ? (
+                        <>
+                          <QrCode className="w-3.5 h-3.5" />
+                          <span>
+                            {waDeviceStatus.status === 'connected'
+                              ? `Perangkat WA (+${waDeviceStatus.device?.phone || 'Tertaut'})`
+                              : 'Perangkat Belum Scan QR'}
+                          </span>
+                        </>
+                      ) : sendingMethod === 'cloud_api' ? (
+                        '📡 Cloud API'
+                      ) : (
+                        '💻 WhatsApp Web'
+                      )}
+                    </button>
                     <button 
                       onClick={sendBlastAll}
                       disabled={filteredBlastData.filter(d => d.status === 'pending').length === 0}
@@ -1960,25 +2124,64 @@ export default function App() {
                           <MessageCircle className="w-4 h-4 text-emerald-500" />
                           <span>Metode Pengiriman WhatsApp</span>
                         </h4>
-                        <p className="text-xs text-slate-400 mt-0.5 font-medium">Pilih antara WhatsApp Web (Manual) atau WhatsApp Cloud API Meta (Otomatis & Serverless)</p>
+                        <p className="text-xs text-slate-400 mt-0.5 font-medium">Pilih Perangkat Tertaut (Scan Barcode), WhatsApp Web (Manual), atau Cloud API Meta</p>
                       </div>
-                      <div className="flex bg-slate-200/70 p-1 rounded-xl">
+                      <div className="flex flex-wrap bg-slate-200/70 p-1 rounded-xl gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setSendingMethod('device')}
+                          className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${sendingMethod === 'device' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                        >
+                          Perangkat (Scan QR)
+                        </button>
                         <button
                           type="button"
                           onClick={() => setSendingMethod('wa_web')}
-                          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${sendingMethod === 'wa_web' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                          className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${sendingMethod === 'wa_web' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
                         >
                           WhatsApp Web
                         </button>
                         <button
                           type="button"
                           onClick={() => setSendingMethod('cloud_api')}
-                          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${sendingMethod === 'cloud_api' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                          className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${sendingMethod === 'cloud_api' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
                         >
                           Cloud API (Meta)
                         </button>
                       </div>
                     </div>
+
+                    {sendingMethod === 'device' && (
+                      <div className="bg-white p-4 rounded-xl border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+                        <div className="flex items-start gap-3.5">
+                          <div className={`p-2 rounded-lg ${waDeviceStatus.status === 'connected' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'} flex-shrink-0`}>
+                            <Smartphone className="w-5 h-5" />
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                              <span>Status Perangkat Tertaut:</span>
+                              <span className={waDeviceStatus.status === 'connected' ? 'text-emerald-700' : 'text-amber-700'}>
+                                {waDeviceStatus.status === 'connected'
+                                  ? `Terhubung (+${waDeviceStatus.device?.phone || '-'})`
+                                  : 'Belum Terhubung'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 leading-relaxed">
+                              {waDeviceStatus.status === 'connected'
+                                ? 'Perangkat WhatsApp aktif di dalam aplikasi dan siap mengirim blast secara otomatis.'
+                                : 'Buka menu Perangkat untuk memindai Barcode QR WhatsApp terlebih dahulu.'}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentTab('perangkat')}
+                          className="px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition-colors whitespace-nowrap shrink-0"
+                        >
+                          {waDeviceStatus.status === 'connected' ? 'Kelola Perangkat' : 'Scan Barcode Sekarang'}
+                        </button>
+                      </div>
+                    )}
 
                     {sendingMethod === 'cloud_api' && (
                       <div className="bg-white p-4 rounded-xl border border-slate-100 flex items-start gap-3.5">
@@ -2062,6 +2265,30 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            </motion.div>
+          )}
+
+          {currentTab === 'perangkat' && (
+            <motion.div
+              key="perangkat"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+            >
+              <DeviceView
+                deviceStatus={waDeviceStatus}
+                onRefreshStatus={checkWaDeviceStatus}
+                onConnect={connectWaDevice}
+                onDisconnect={disconnectWaDevice}
+                onNotify={showToast}
+                sendingMethod={sendingMethod}
+                onSelectDeviceMethod={() => {
+                  setSendingMethod('device');
+                  showToast('Jalur pengiriman diaktifkan ke Perangkat WhatsApp Tertaut');
+                }}
+                onOpenBlast={() => setCurrentTab('blast')}
+                isAdmin={userRole === 'admin'}
+              />
             </motion.div>
           )}
 
@@ -2180,7 +2407,9 @@ export default function App() {
                   <h3 className="text-lg font-black text-slate-900 tracking-tight">
                     {blastProgress.active ? 'Mengirim Pesan Massal...' : 'Proses Blast Selesai!'}
                   </h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5 font-bold uppercase tracking-wider">Metode: WhatsApp Cloud API (Meta)</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5 font-bold uppercase tracking-wider">
+                    Metode: {sendingMethod === 'device' ? 'Perangkat WhatsApp Tertaut (Scan QR)' : 'WhatsApp Cloud API (Meta)'}
+                  </p>
                 </div>
               </div>
 
