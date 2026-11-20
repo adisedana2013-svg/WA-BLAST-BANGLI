@@ -310,6 +310,17 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Enable CORS so static/Vercel frontends can connect to this WA Gateway server
+  app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   // Auto-resume existing paired WhatsApp session if credentials exist on disk
   if (fs.existsSync(path.join(AUTH_DIR, "creds.json"))) {
     void startWhatsAppSession(false);

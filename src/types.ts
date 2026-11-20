@@ -26,6 +26,7 @@ export interface WaDeviceStatus {
   qrUpdatedAt: number | null;
   device: WaDeviceInfo | null;
   lastError: string | null;
+  serverlessUnconfigured?: boolean;
 }
 
 export interface AppBackup {

@@ -11,7 +11,8 @@ import {
   Wifi,
   WifiOff,
   ArrowRight,
-  Clock
+  Clock,
+  Server
 } from 'lucide-react';
 import { WaDeviceStatus } from '../types.ts';
 
@@ -25,6 +26,9 @@ interface DeviceViewProps {
   onSelectDeviceMethod: () => void;
   onOpenBlast?: () => void;
   isAdmin: boolean;
+  waServerUrl: string;
+  onSaveWaServerUrl: (url: string) => Promise<boolean>;
+  buildWaApiUrl: (endpoint: string) => string;
 }
 
 export const DeviceView: React.FC<DeviceViewProps> = ({
@@ -36,7 +40,10 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
   sendingMethod,
   onSelectDeviceMethod,
   onOpenBlast,
-  isAdmin
+  isAdmin,
+  waServerUrl,
+  onSaveWaServerUrl,
+  buildWaApiUrl
 }) => {
   const [actionLoading, setActionLoading] = useState(false);
   const [testPhone, setTestPhone] = useState('');
@@ -45,6 +52,13 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
   );
   const [sendingTest, setSendingTest] = useState(false);
   const [qrAgeSeconds, setQrAgeSeconds] = useState(0);
+  const [showServerConfig, setShowServerConfig] = useState(false);
+  const [serverInput, setServerInput] = useState(waServerUrl);
+  const [savingServer, setSavingServer] = useState(false);
+
+  useEffect(() => {
+    setServerInput(waServerUrl);
+  }, [waServerUrl]);
 
   // Track QR age in seconds for visual clarity while scanning
   useEffect(() => {
@@ -79,6 +93,29 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
     }
   };
 
+  const handleSaveServerUrlSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingServer(true);
+    try {
+      const ok = await onSaveWaServerUrl(serverInput);
+      if (ok) {
+        setShowServerConfig(false);
+      }
+    } finally {
+      setSavingServer(false);
+    }
+  };
+
+  const handleResetServerUrl = async () => {
+    setSavingServer(true);
+    try {
+      setServerInput('');
+      await onSaveWaServerUrl('');
+    } finally {
+      setSavingServer(false);
+    }
+  };
+
   const handleSendTest = async (e: React.FormEvent) => {
     e.preventDefault();
     const targetPhone = testPhone.trim() || deviceStatus.device?.phone || '';
@@ -88,7 +125,7 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
     }
     setSendingTest(true);
     try {
-      const res = await fetch('/api/wa-device/send', {
+      const res = await fetch(buildWaApiUrl('/api/wa-device/send'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: targetPhone, message: testMessage })
@@ -135,6 +172,7 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
   const isConnected = deviceStatus.status === 'connected';
   const isQrReady = deviceStatus.status === 'qr' && !!deviceStatus.qrDataUrl;
   const isConnecting = deviceStatus.status === 'connecting';
+  const isServerlessUnconfigured = !!deviceStatus.serverlessUnconfigured;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-12">
@@ -194,6 +232,14 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
                   </>
                 )}
               </span>
+              {waServerUrl && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-slate-600 truncate max-w-[220px]">
+                    Gateway: {waServerUrl}
+                  </span>
+                </>
+              )}
               {isConnected && deviceStatus.device && (
                 <>
                   <span aria-hidden="true">·</span>
@@ -208,11 +254,24 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowServerConfig((v) => !v)}
+            className={`px-3.5 py-2 border rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 ${
+              showServerConfig || isServerlessUnconfigured
+                ? 'bg-slate-900 border-slate-900 text-white hover:bg-slate-800'
+                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Server className="w-3.5 h-3.5" />
+            <span>Server Gateway</span>
+          </button>
+
           <button
             type="button"
             onClick={() => onRefreshStatus()}
-            className="px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
+            className="px-3.5 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
           >
             <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
             <span>Segarkan Status</span>
@@ -223,7 +282,7 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
               type="button"
               onClick={handleDisconnectClick}
               disabled={actionLoading}
-              className="px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 disabled:opacity-50"
+              className="px-3.5 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 disabled:opacity-50"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>Putuskan Perangkat</span>
@@ -231,6 +290,62 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Vercel / External WA Gateway URL Configuration Panel */}
+      {(showServerConfig || isServerlessUnconfigured) && (
+        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
+              <Server className="w-4 h-4" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-slate-900">
+                {isServerlessUnconfigured
+                  ? 'Hosting Serverless Terdeteksi (Vercel) — Hubungkan Server WA Gateway'
+                  : 'Pengaturan Alamat Server WA Gateway'}
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Vercel hanya menjalankan halaman statis dan fungsi serverless singkat sehingga tidak
+                dapat menahan koneksi WebSocket Barcode WhatsApp secara langsung. Agar scan barcode
+                berjalan di Vercel, jalankan <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">server.ts</code> di
+                server Node.js aktif (Railway, Render, Cloud Run, atau VPS) lalu masukkan URL-nya di bawah.
+              </p>
+            </div>
+          </div>
+
+          <form
+            onSubmit={handleSaveServerUrlSubmit}
+            className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2"
+          >
+            <input
+              type="url"
+              value={serverInput}
+              onChange={(e) => setServerInput(e.target.value)}
+              placeholder="https://server-wa-samsat.up.railway.app"
+              className="flex-1 bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-sm font-mono text-slate-800 outline-none focus:border-blue-600"
+            />
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="submit"
+                disabled={savingServer}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+              >
+                {savingServer ? 'Menguji...' : 'Simpan & Hubungkan'}
+              </button>
+              {waServerUrl && (
+                <button
+                  type="button"
+                  onClick={handleResetServerUrl}
+                  disabled={savingServer}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+                >
+                  Reset Default
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Main 2-Column Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -489,11 +604,13 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
           </ol>
 
           <div className="pt-5 border-t border-slate-100 text-xs text-slate-500 leading-relaxed space-y-2">
-            <p className="font-semibold text-slate-700">Catatan Operasional</p>
+            <p className="font-semibold text-slate-700">Catatan Deployment Vercel</p>
             <p>
-              Setelah tertaut, status koneksi tersimpan di server aplikasi dan dapat langsung
-              dipilih sebagai jalur pengiriman otomatis di menu <strong>Format Pesan</strong> maupun{' '}
-              <strong>Kirim Pesan</strong>.
+              Jika aplikasi diakses lewat Vercel, Anda dapat menghubungkan URL Server WA Gateway
+              melalui tombol <strong>Server Gateway</strong> di atas (atau set variabel lingkungan{' '}
+              <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">WA_GATEWAY_URL</code> di
+              Vercel), atau memilih metode <strong>WhatsApp Web</strong> /{' '}
+              <strong>Cloud API (Meta)</strong> di menu Format Pesan.
             </p>
           </div>
         </div>
