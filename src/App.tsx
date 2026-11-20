@@ -187,11 +187,38 @@ export default function App() {
     }
   }, [sendingMethod]);
 
+  const showToast = useCallback((msg: string, type: 'success' | 'error' | 'warn' | 'info' = 'success') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, msg, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
+  }, []);
+
+  const safeParseResponse = async (res: Response) => {
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      const trimmed = text.trim();
+      const looksLikeGatewayError =
+        res.status >= 500 ||
+        trimmed.startsWith('<') ||
+        trimmed.toLowerCase().includes('the page');
+      throw new Error(
+        looksLikeGatewayError
+          ? `Server backend sedang memulai ulang atau belum aktif (${res.status}). Tunggu beberapa detik lalu coba lagi.`
+          : `Respons server tidak valid (${res.status}).`
+      );
+    }
+  };
+
   const checkWaConfigStatus = async () => {
     try {
       const res = await fetch('/api/whatsapp-status');
       if (res.ok) {
-        const data = await res.json();
+        const data = await safeParseResponse(res);
         setWaConfig(data);
       }
     } catch (e) {
@@ -203,7 +230,7 @@ export default function App() {
     try {
       const res = await fetch('/api/wa-device/status');
       if (res.ok) {
-        const data: WaDeviceStatus = await res.json();
+        const data: WaDeviceStatus = await safeParseResponse(res);
         setWaDeviceStatus(prev => {
           if (prev.status !== 'connected' && data.status === 'connected') {
             setSendingMethod('device');
@@ -217,13 +244,23 @@ export default function App() {
   }, []);
 
   const connectWaDevice = useCallback(async (fresh = false) => {
-    try {
+    const attemptConnect = async () => {
       const res = await fetch('/api/wa-device/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fresh })
       });
-      const data = await res.json();
+      const data = await safeParseResponse(res);
+      return { res, data };
+    };
+
+    try {
+      let { res, data } = await attemptConnect();
+      if (!res.ok && res.status >= 502) {
+        await new Promise(r => setTimeout(r, 1500));
+        ({ res, data } = await attemptConnect());
+      }
+
       if (res.ok) {
         setWaDeviceStatus({
           status: data.status || 'connecting',
@@ -233,17 +270,38 @@ export default function App() {
           lastError: data.lastError || null
         });
       } else {
-        showToast(data.error || 'Gagal memulai koneksi WhatsApp', 'error');
+        const errMsg = data?.error || 'Gagal memulai koneksi WhatsApp';
+        setWaDeviceStatus(prev => ({ ...prev, status: 'error', lastError: errMsg }));
+        showToast(errMsg, 'error');
       }
     } catch (e: any) {
-      showToast(e?.message || 'Gagal menghubungi server perangkat', 'error');
+      // Retry once automatically in case server just woke up or restarted
+      try {
+        await new Promise(r => setTimeout(r, 1500));
+        const { res, data } = await attemptConnect();
+        if (res.ok) {
+          setWaDeviceStatus({
+            status: data.status || 'connecting',
+            qrDataUrl: data.qrDataUrl || null,
+            qrUpdatedAt: data.qrUpdatedAt || null,
+            device: data.device || null,
+            lastError: data.lastError || null
+          });
+          return;
+        }
+      } catch {
+        // Fall through to error display
+      }
+      const msg = e?.message || 'Gagal menghubungi server perangkat';
+      setWaDeviceStatus(prev => ({ ...prev, status: 'error', lastError: msg }));
+      showToast(msg, 'error');
     }
-  }, []);
+  }, [showToast]);
 
   const disconnectWaDevice = useCallback(async () => {
     try {
       const res = await fetch('/api/wa-device/disconnect', { method: 'POST' });
-      const data = await res.json();
+      const data = await safeParseResponse(res);
       if (res.ok) {
         setWaDeviceStatus({
           status: data.status || 'disconnected',
@@ -257,7 +315,7 @@ export default function App() {
     } catch (e: any) {
       showToast(e?.message || 'Gagal memutuskan perangkat', 'error');
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     // Initial fetch from Google Sheet and check WA config + device status
@@ -280,13 +338,6 @@ export default function App() {
   }, [currentTab, waDeviceStatus.status, checkWaDeviceStatus]);
 
   // --- Helpers ---
-  const showToast = useCallback((msg: string, type: 'success' | 'error' | 'warn' | 'info' = 'success') => {
-    const id = Date.now();
-    setToasts(prev => [...prev, { id, msg, type }]);
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 3000);
-  }, []);
 
   const formatDate = (d: string) => {
     if (!d) return '-';
@@ -584,7 +635,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: item.no_wa, message: msg })
         });
-        const data = await res.json();
+        const data = await safeParseResponse(res);
         if (data.success) {
           const updated = { ...item, status: 'sent' as const, sent_at: new Date().toISOString() };
           setAllData(prev => prev.map(d => d.nopol === item.nopol ? updated : d));
@@ -604,7 +655,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: item.no_wa, message: msg })
         });
-        const data = await res.json();
+        const data = await safeParseResponse(res);
         if (data.success) {
           const updated = { ...item, status: 'sent' as const, sent_at: new Date().toISOString() };
           setAllData(prev => prev.map(d => d.nopol === item.nopol ? updated : d));
@@ -668,7 +719,7 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ to: item.no_wa, message: msg })
           });
-          const resData = await res.json();
+          const resData = await safeParseResponse(res);
           if (resData.success) {
             sentCount++;
             const now = new Date().toISOString();

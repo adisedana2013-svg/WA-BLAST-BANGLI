@@ -36,6 +36,7 @@ let waSocket: WASocket | null = null;
 let isInitializing = false;
 let manualDisconnect = false;
 let qrAttemptCount = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 let waState: WaDeviceState = {
   status: "disconnected",
@@ -44,6 +45,15 @@ let waState: WaDeviceState = {
   device: null,
   lastError: null,
 };
+
+// Prevent Baileys background socket rejections from crashing the Express server
+process.on("unhandledRejection", (reason: any) => {
+  console.error("[WA Server] Unhandled Rejection:", reason?.message || reason);
+});
+
+process.on("uncaughtException", (err: any) => {
+  console.error("[WA Server] Uncaught Exception:", err?.message || err);
+});
 
 function clearAuthFolder() {
   try {
@@ -71,6 +81,10 @@ function extractPhoneFromJid(jid?: string): string {
 }
 
 async function destroyExistingSocket() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (waSocket) {
     try {
       waSocket.ev.removeAllListeners("connection.update");
@@ -81,6 +95,22 @@ async function destroyExistingSocket() {
     }
     waSocket = null;
   }
+}
+
+async function getSafeWaVersion(): Promise<[number, number, number]> {
+  const fallback: [number, number, number] = [2, 3000, 1027934701];
+  try {
+    const result = await Promise.race([
+      fetchLatestWaWebVersion({}),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (result && "version" in result && Array.isArray(result.version)) {
+      return result.version;
+    }
+  } catch {
+    // Use fallback version
+  }
+  return fallback;
 }
 
 async function startWhatsAppSession(resetAuth = false): Promise<void> {
@@ -109,16 +139,7 @@ async function startWhatsAppSession(resetAuth = false): Promise<void> {
     };
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-
-    let version: [number, number, number] = [2, 3000, 1027934701];
-    try {
-      const latest = await fetchLatestWaWebVersion({});
-      if (latest?.version) {
-        version = latest.version;
-      }
-    } catch {
-      // Fallback to default version
-    }
+    const version = await getSafeWaVersion();
 
     const sock = makeWASocket({
       version,
@@ -134,14 +155,19 @@ async function startWhatsAppSession(resetAuth = false): Promise<void> {
 
     waSocket = sock;
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", async () => {
+      try {
+        await saveCreds();
+      } catch (e) {
+        console.error("[WA Server] saveCreds error:", e);
+      }
+    });
 
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
         qrAttemptCount += 1;
-        // Stop endless QR cycling after 6 refreshes (~2 minutes) if untouched
         if (qrAttemptCount > 6 && !state.creds.registered) {
           manualDisconnect = true;
           await destroyExistingSocket();
@@ -150,7 +176,8 @@ async function startWhatsAppSession(resetAuth = false): Promise<void> {
             qrDataUrl: null,
             qrUpdatedAt: null,
             device: null,
-            lastError: "Barcode QR kedaluwarsa karena belum dipindai. Klik tombol untuk membuat barcode baru.",
+            lastError:
+              "Barcode QR kedaluwarsa karena belum dipindai. Klik tombol untuk membuat barcode baru.",
           };
           return;
         }
@@ -235,22 +262,22 @@ async function startWhatsAppSession(resetAuth = false): Promise<void> {
           return;
         }
 
-        // Reconnect for restartRequired (515), connectionLost (408), connectionClosed (428), etc.
         if (
           statusCode === DisconnectReason.restartRequired ||
           statusCode === DisconnectReason.connectionClosed ||
           statusCode === DisconnectReason.connectionLost ||
           statusCode === DisconnectReason.timedOut ||
-          statusCode === DisconnectReason.unavailableService
+          statusCode === DisconnectReason.unavailableService ||
+          !statusCode
         ) {
           waState = {
             ...waState,
             status: "connecting",
             lastError: null,
           };
-          setTimeout(() => {
+          reconnectTimer = setTimeout(() => {
             if (!manualDisconnect) {
-              startWhatsAppSession(false);
+              void startWhatsAppSession(false);
             }
           }, 1500);
         } else {
@@ -279,13 +306,13 @@ async function startWhatsAppSession(resetAuth = false): Promise<void> {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
   // Auto-resume existing paired WhatsApp session if credentials exist on disk
   if (fs.existsSync(path.join(AUTH_DIR, "creds.json"))) {
-    startWhatsAppSession(false);
+    void startWhatsAppSession(false);
   }
 
   // API: Get configuration status of WhatsApp Cloud API
@@ -302,15 +329,23 @@ async function startServer() {
     res.json(waState);
   });
 
-  // API: Start pairing & generate QR code
-  app.post("/api/wa-device/connect", async (req, res) => {
+  // API: Start pairing & generate QR code (non-blocking so HTTP responds immediately)
+  app.post("/api/wa-device/connect", (req, res) => {
     try {
       const { fresh } = req.body || {};
       if (waState.status === "connected" && !fresh) {
         return res.json({ success: true, ...waState });
       }
       qrAttemptCount = 0;
-      await startWhatsAppSession(Boolean(fresh) || waState.status === "error");
+      const shouldReset = Boolean(fresh) || waState.status === "error";
+      waState = {
+        status: "connecting",
+        qrDataUrl: null,
+        qrUpdatedAt: null,
+        device: null,
+        lastError: null,
+      };
+      void startWhatsAppSession(shouldReset);
       res.json({ success: true, ...waState });
     } catch (error: any) {
       res.status(500).json({
@@ -357,14 +392,14 @@ async function startServer() {
       if (!waSocket || waState.status !== "connected") {
         return res.status(400).json({
           success: false,
-          error: "Perangkat WhatsApp belum terhubung. Silakan scan barcode di menu Perangkat terlebih dahulu.",
+          error:
+            "Perangkat WhatsApp belum terhubung. Silakan scan barcode di menu Perangkat terlebih dahulu.",
         });
       }
 
       const jid = formatPhoneToJid(to);
       const cleanNumber = jid.split("@")[0];
 
-      // Check if number is registered on WhatsApp (non-blocking fallback if query fails)
       let targetJid = jid;
       try {
         const results = await waSocket.onWhatsApp(cleanNumber);
@@ -465,6 +500,25 @@ async function startServer() {
         error: error.message || "Terjadi kesalahan pada internal server",
       });
     }
+  });
+
+  // Ensure unknown /api/* routes always return JSON
+  app.use("/api", (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: `Endpoint API tidak ditemukan: ${req.method} ${req.originalUrl}`,
+    });
+  });
+
+  // Global JSON error handler for Express
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (req.path.startsWith("/api")) {
+      return res.status(err?.status || 500).json({
+        success: false,
+        error: err?.message || "Terjadi kesalahan pada server",
+      });
+    }
+    next(err);
   });
 
   // Vite middleware for development

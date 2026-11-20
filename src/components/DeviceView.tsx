@@ -93,7 +93,13 @@ export const DeviceView: React.FC<DeviceViewProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: targetPhone, message: testMessage })
       });
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(`Respons server tidak valid (${res.status}). Silakan coba lagi.`);
+      }
       if (data.success) {
         onNotify(`Pesan uji coba berhasil dikirim ke ${data.to}`, 'success');
       } else {
